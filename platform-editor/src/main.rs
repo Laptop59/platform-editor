@@ -11,11 +11,11 @@ use platform_editor_core::save::campaign::LevelSave;
 use platform_editor_core::save::{LEVEL_SAVE_LOCATION, ReadFrom, WriteTo};
 use platform_editor_core::screen::{Screen, ScreenManager, SharedTransitionData, TransitionCall};
 use sdl3::EventPump;
-use sdl3::event::Event;
+use sdl3::event::{Event, WindowEvent};
 use sdl3::pixels::Color;
 use sdl3::rect::Rect;
 use sdl3::render::{BlendMode, Canvas, FPoint};
-use sdl3::ttf::Font;
+use sdl3::ttf::{Font, Sdl3TtfContext};
 use sdl3::video::Window;
 use sdl3_sys::render::SDL_RendererLogicalPresentation;
 
@@ -24,7 +24,7 @@ use crate::assets::textures::Textures;
 use crate::component::Component;
 use crate::logic::input::{InputData, MouseEvent, converted_pos};
 use crate::logic::{Logic, LogicData};
-use crate::render::{Background, DrawResult, Render, RenderData};
+use crate::render::{Background, DrawResult, Render, RenderData, SizedFont};
 
 pub mod assets;
 pub mod component;
@@ -39,6 +39,13 @@ mod font;
 pub const WIDTH: u32 = 1280;
 /// The target height of the window.
 pub const HEIGHT: u32 = 720;
+
+/// The font size to render at the default resolution.
+/// This is then scaled linearly based on the resolution dimension.
+pub const DEFAULT_FONT_SIZE: f32 = 96.0;
+
+/// The reference font size with which scale is multipled.
+pub const REFERENCE_FONT_SIZE: f32 = 48.0;
 
 /// A priority for components with no logic.
 pub const NO_LOGIC_PRIORITY: i32 = i32::MIN;
@@ -83,8 +90,8 @@ pub fn main() {
 
     let texture_creator = canvas.texture_creator();
 
-    let context = sdl3::ttf::init().expect("could not initialize TTF context");
-    let font = font::load_font(&context, 48.0).expect("could not load font");
+    let ttf_context = sdl3::ttf::init().expect("could not initialize TTF context");
+    let font = font::load_font(&ttf_context, DEFAULT_FONT_SIZE).expect("could not load font");
 
     let textures = Textures::load(&texture_creator).expect("could not create textures");
 
@@ -109,7 +116,11 @@ pub fn main() {
         }
     };
 
-    let mut app = App { event_pump, canvas };
+    let mut app = App {
+        event_pump,
+        canvas,
+        ttf_context,
+    };
 
     app.run(textures, font, pref_path, audio_player)
 }
@@ -120,6 +131,7 @@ pub fn main() {
 pub struct App {
     event_pump: EventPump,
     canvas: Canvas<Window>,
+    ttf_context: Sdl3TtfContext,
 }
 
 /// A mode deciding the maximum FPS or VSync.
@@ -141,6 +153,9 @@ pub struct ExtraAppData {
 
     /// The pref path.
     pref_path: Option<PathBuf>,
+
+    // The current font point size.
+    font_point_size: f32,
 }
 
 impl Default for ExtraAppData {
@@ -149,6 +164,7 @@ impl Default for ExtraAppData {
             present_mode: PresentMode::Capped(60),
             last_y_mouse_pos: None,
             pref_path: None,
+            font_point_size: DEFAULT_FONT_SIZE,
         }
     }
 }
@@ -163,7 +179,7 @@ pub struct ExtractedData<'i> {
 
 pub struct GameTickData<'a, 'c> {
     textures: &'a mut Textures<'c>,
-    font: &'static Font<'static>,
+    font: &'a mut Font<'static>,
     components: &'a mut ComponentMap,
     app_data: &'a mut AppData,
     transition_manager: &'a mut ScreenManager,
@@ -324,6 +340,27 @@ impl App {
                 Event::MouseButtonDown { mouse_btn, .. } => {
                     mouse_button_events.push(MouseEvent::Down(mouse_btn));
                 }
+                Event::Window {
+                    win_event: WindowEvent::Resized(width, height),
+                    ..
+                } => {
+                    let scale = (width as f32 / WIDTH as f32).min(height as f32 / HEIGHT as f32);
+
+                    let mut font_size_changed = false;
+                    while scale * DEFAULT_FONT_SIZE > tick_data.app_data.extra.font_point_size {
+                        // For higher resolution screens, reload the font with a bigger size.
+                        tick_data.app_data.extra.font_point_size *= 2.0;
+                        font_size_changed = true;
+                    }
+
+                    if font_size_changed {
+                        *tick_data.font = font::load_font(
+                            &self.ttf_context,
+                            tick_data.app_data.extra.font_point_size,
+                        )
+                        .expect("could not load font")
+                    }
+                }
                 _ => {}
             }
         }
@@ -386,7 +423,10 @@ impl App {
             start,
             &mut self.canvas,
             tick_data.textures,
-            tick_data.font,
+            SizedFont {
+                font: tick_data.font,
+                point_size: tick_data.app_data.extra.font_point_size,
+            },
             tick_data.components,
             tick_data.transition_manager.transition_data(),
             &extracted,
@@ -437,7 +477,7 @@ impl App {
         start: Instant,
         canvas: &mut Canvas<Window>,
         images: &mut Textures,
-        font: &'static Font,
+        font: SizedFont,
         components: &mut ComponentMap,
         transition: Option<SharedTransitionData>,
         extracted: &ExtractedData,

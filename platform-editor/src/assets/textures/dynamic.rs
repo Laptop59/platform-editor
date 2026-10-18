@@ -5,7 +5,7 @@ use sdl3::{
     get_error,
     pixels::{Color, PixelFormat},
     render::{Canvas, FPoint, FRect, TextureCreator},
-    ttf::{Font, sys::TTF_RenderText_Blended},
+    ttf::sys::TTF_RenderText_Blended,
     video::{Window, WindowContext},
 };
 use sdl3_sys::{
@@ -16,7 +16,11 @@ use sdl3_sys::{
     surface::{SDL_DestroySurface, SDL_Surface},
 };
 
-use crate::{render::DrawResult, util::FRectExt};
+use crate::{
+    REFERENCE_FONT_SIZE,
+    render::{DrawResult, SizedFont},
+    util::FRectExt,
+};
 
 /// A text alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +48,7 @@ pub struct DynamicText<'c> {
     texture: *mut SDL_Texture,
     cached_text: Cow<'static, str>,
     color: Color,
+    font_point_size: f32,
 }
 
 impl DynamicText<'_> {
@@ -66,6 +71,7 @@ impl DynamicText<'_> {
             texture: ptr::null::<SDL_Texture>() as *mut SDL_Texture,
             cached_text: Cow::Borrowed(""),
             color: color.into(),
+            font_point_size: 0.0,
         }
     }
 
@@ -74,11 +80,14 @@ impl DynamicText<'_> {
     pub fn update(
         &mut self,
         canvas: &mut Canvas<Window>,
-        font: &Font,
+        font: SizedFont,
         new_text: impl Into<Cow<'static, str>>,
     ) -> DrawResult {
         let new_text = new_text.into();
-        if !self.texture.is_null() && self.cached_text == new_text {
+        if !self.texture.is_null()
+            && self.cached_text == new_text
+            && self.font_point_size == font.point_size
+        {
             // No change: reuse the existing texture
             return Ok(());
         }
@@ -91,6 +100,7 @@ impl DynamicText<'_> {
 
         let c_text = CString::new(new_text.to_string()).unwrap();
         self.cached_text = new_text;
+        self.font_point_size = font.point_size;
 
         unsafe {
             let surface: *mut SDL_Surface =
@@ -123,15 +133,18 @@ impl DynamicText<'_> {
             return Ok(());
         }
 
-        let Vec2 {
-            x: width,
-            y: height,
-        } = self.dimensions();
+        let factor = scale * REFERENCE_FONT_SIZE / self.font_point_size;
 
-        let width = scale * width;
+        let Vec2 {
+            x: mut width,
+            y: mut height,
+        } = self.dimensions();
+        width *= factor;
+        height *= factor;
+
         let mut position = position.into();
         position.x -= (alignment.shift_decimal() - 0.5) * width;
-        let dst = FRect::from_center(position, width, scale * height);
+        let dst = FRect::from_center(position, width, height);
 
         if unsafe {
             !SDL_SetTextureColorMod(self.texture, self.color.r, self.color.g, self.color.b)
@@ -178,19 +191,20 @@ impl DynamicText<'_> {
         if unsafe { !SDL_GetTextureSize(self.texture, &mut width, &mut height) } {
             return Vec2::new(0.0, 0.0);
         }
+
         Vec2::new(width, height)
     }
 
-    /// Returns the width of this text
+    /// Returns the width of this text relative to rendering dimensions
     /// (or `0` if nothing has been loaded by this texture yet).
     pub fn width(&self) -> f32 {
-        self.dimensions().x
+        self.dimensions().x * REFERENCE_FONT_SIZE / self.font_point_size
     }
 
-    /// Returns the height of this text
+    /// Returns the height of this text relative to rendering dimensions
     /// (or `0` if nothing has been loaded by this texture yet).
     pub fn height(&self) -> f32 {
-        self.dimensions().y
+        self.dimensions().y * REFERENCE_FONT_SIZE / self.font_point_size
     }
 }
 

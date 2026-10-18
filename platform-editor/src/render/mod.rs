@@ -8,7 +8,7 @@ use sdl3::{
     Error,
     rect::{Point, Rect},
     render::Canvas,
-    ttf::Font,
+    ttf::{Font, sys::TTF_Font},
     video::Window,
 };
 
@@ -16,11 +16,24 @@ use crate::{ExtractedData, assets::textures::Textures};
 
 pub type DrawResult<T = ()> = Result<T, Error>;
 
+#[derive(Copy, Clone)]
+pub struct SizedFont<'i> {
+    pub font: &'i Font<'static>,
+    pub point_size: f32,
+}
+
+impl SizedFont<'_> {
+    /// Returns the raw TTF font pointer from this font.
+    pub fn raw(&self) -> *mut TTF_Font {
+        unsafe { self.font.raw() }
+    }
+}
+
 /// Useful data for rendering.
 pub struct RenderData<'window, 'i, 'c> {
     pub canvas: &'window mut Canvas<Window>,
     pub textures: &'i mut Textures<'c>,
-    pub font: &'static Font<'static>,
+    pub font: SizedFont<'i>,
     pub start: Instant,
     /// The current transition's data, if any.
     pub transition: Option<SharedTransitionData>,
@@ -33,7 +46,7 @@ impl<'window, 'i, 'c> RenderData<'window, 'i, 'c> {
         canvas: &'window mut Canvas<Window>,
         start: Instant,
         textures: &'i mut Textures<'c>,
-        font: &'static Font,
+        font: SizedFont<'i>,
         transition: Option<SharedTransitionData>,
         extracted: &'i ExtractedData<'i>,
     ) -> Self {
